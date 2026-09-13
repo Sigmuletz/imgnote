@@ -1,0 +1,425 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>imgnote selftest</title>
+<link rel="stylesheet" href="/style.css">
+<style>#results{position:fixed;inset:0;z-index:99999;background:#111;color:#ddd;font:12px/1.5 monospace;padding:12px;overflow:auto;white-space:pre}</style>
+<div id="app">
+  <aside id="palette">
+    <input id="palette-filter" placeholder="filter">
+    <div id="palette-list"></div>
+  </aside>
+  <main id="viewport">
+    <div id="grid-layer"></div>
+    <div id="canvas"><svg id="hull-layer"></svg></div>
+    <div id="marquee" hidden></div>
+  </main>
+  <div id="toolbar">
+    <input id="grid-size" type="number" value="32">
+    <input id="show-grid" type="checkbox" checked>
+    <button id="theme-toggle">theme</button>
+  </div>
+  <div id="statusbar"></div>
+</div>
+<pre id="results">booting…</pre>
+<script type="module">
+// Synthetic pointer events carry ids the browser never issued, so capture calls
+// would throw. Capture only affects event routing, and we dispatch directly.
+Element.prototype.setPointerCapture = function () {};
+Element.prototype.releasePointerCapture = function () {};
+
+const out = [];
+let pass = 0, fail = 0;
+const flush = () => { document.getElementById('results').textContent = out.join('\n'); };
+const note = m => { out.push(`..    ${m}`); flush(); };
+const ok = (name, cond, detail = '') => {
+  (cond ? pass++ : fail++);
+  out.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
+  flush();
+};
+// rAF can stall in headless; fall back on a timer so a test never hangs forever.
+// Wait for a real animation frame. Headless virtual time can starve rAF, so
+// there is a generous timeout fallback -- but it must be long enough that rAF
+// wins under normal conditions, or drag code that runs in rAF never executes.
+const frame = () => new Promise(r => {
+  let done = false;
+  const fin = () => { if (!done) { done = true; r(); } };
+  requestAnimationFrame(() => requestAnimationFrame(fin));
+  setTimeout(fin, 1000);
+});
+
+out.push('boot: module running'); flush();
+let A;
+try {
+  A = await import('/app.js');
+  note(`app.js imported (${Object.keys(A).length} exports)`);
+  await import('/drag.js');
+  note('drag.js imported');
+} catch (e) { out.push('FAIL  import threw: ' + (e && e.stack || e)); flush(); throw e; }
+
+// wait for boot (palette populated by app.js after fetch /files)
+for (let i = 0; i < 200 && document.querySelectorAll('.palette-item').length === 0; i++) {
+  await new Promise(r => setTimeout(r, 25));
+}
+note(`boot settled: ${document.querySelectorAll('.palette-item').length} palette items, ${A.state.items.length} board items`);
+
+const vp = document.getElementById('viewport');
+const pt = (wx, wy) => { const s = A.worldToScreen(wx, wy); return { clientX: s.x, clientY: s.y }; };
+const ev = (type, target, opts) => target.dispatchEvent(new PointerEvent(type, {
+  bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, ...opts,
+}));
+
+async function dragFrom(itemEl, fromW, toW, opts = {}) {
+  const a = pt(fromW.x, fromW.y), b = pt(toW.x, toW.y);
+  ev('pointerdown', itemEl, { ...a, ...opts });
+  await frame();
+  ev('pointermove', vp, { ...b, ...opts });
+  await frame();
+  ev('pointerup', vp, { ...b, ...opts });
+  await frame();
+}
+const el = id => document.querySelector(`.item[data-id="${id}"]`);
+const byId = id => A.state.items.find(i => i.id === id);
+
+try {
+  // --- boot ---------------------------------------------------------------
+  ok('palette lists 15 files', document.querySelectorAll('.palette-item').length === 15,
+     `got ${document.querySelectorAll('.palette-item').length}`);
+  ok('board starts empty', A.state.items.length === 0, `got ${A.state.items.length}`);
+  ok('grid default 32', A.state.grid === 32);
+
+  // --- snap math ----------------------------------------------------------
+  const d = A.snapDelta(41, 23);
+  ok('snapDelta(41,23) -> (32,32)', d.dx === 32 && d.dy === 32, JSON.stringify(d));
+  ok('snap(137) -> 128', A.snap(137) === 128, String(A.snap(137)));
+
+  // --- build a group ------------------------------------------------------
+  const a = A.addInstance('sun.png', 0, 0);
+  const b = A.addInstance('cloud.png', 64, 0);
+  const c = A.addInstance('star.png', 0, 64);
+  A.render();
+  await frame();
+  ok('three instances added', A.state.items.length === 3);
+
+  A.setSelection([a.id, b.id, c.id]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }));
+  await frame();
+  const g = byId(a.id).group;
+  ok('Ctrl+G assigns one group to all', !!g && byId(b.id).group === g && byId(c.id).group === g, `group=${g}`);
+
+  // --- group drag: delta snapped once, offsets preserved ------------------
+  const before = [a, b, c].map(i => ({ ...byId(i.id) }));
+  A.setSelection([a.id]);
+  ok('selecting one member selects whole group', A.state.selection.size === 3, `size=${A.state.selection.size}`);
+
+  await dragFrom(el(a.id), { x: 0, y: 0 }, { x: 41, y: 23 });
+  const after = [a, b, c].map(i => ({ ...byId(i.id) }));
+  const dx = after[0].x - before[0].x, dy = after[0].y - before[0].y;
+  ok('group drag snaps delta to (32,32)', dx === 32 && dy === 32, `got (${dx},${dy})`);
+  const sameDelta = after.every((it, i) => it.x - before[i].x === dx && it.y - before[i].y === dy);
+  ok('all members moved by identical delta', sameDelta);
+  const relBefore = JSON.stringify(before.map(i => [i.x - before[0].x, i.y - before[0].y]));
+  const relAfter = JSON.stringify(after.map(i => [i.x - after[0].x, i.y - after[0].y]));
+  ok('relative offsets unchanged', relBefore === relAfter, `${relBefore} vs ${relAfter}`);
+  ok('positions land on grid', after.every(i => i.x % 32 === 0 && i.y % 32 === 0));
+
+  // --- duplicate a group --------------------------------------------------
+  const nBefore = A.state.items.length;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('Ctrl+D duplicates 3 items', A.state.items.length === nBefore + 3, `got ${A.state.items.length}`);
+  const copies = A.state.items.slice(-3);
+  const newG = copies[0].group;
+  ok('copy is a new independent group', !!newG && newG !== g && copies.every(i => i.group === newG), `old=${g} new=${newG}`);
+  const relCopy = JSON.stringify(copies.map(i => [i.x - copies[0].x, i.y - copies[0].y]));
+  ok('copy keeps internal offsets', relCopy === relAfter, `${relCopy} vs ${relAfter}`);
+  ok('copy is selected after duplicate', copies.every(i => A.state.selection.has(i.id)));
+
+  // --- marquee ------------------------------------------------------------
+  A.setSelection([]);
+  const lo = pt(-500, -500), hi = pt(1200, 1200);
+  ev('pointerdown', vp, lo);
+  await frame();
+  ev('pointermove', vp, hi);
+  await frame();
+  ev('pointerup', vp, hi);
+  await frame();
+  ok('marquee selects everything it touches', A.state.selection.size === A.state.items.length,
+     `${A.state.selection.size}/${A.state.items.length}`);
+  ok('marquee hidden after release', document.getElementById('marquee').hidden);
+
+  // --- alt+drag duplicates ------------------------------------------------
+  A.setSelection([a.id]);
+  const nAlt = A.state.items.length;
+  const pos = byId(a.id);
+  await dragFrom(el(a.id), { x: pos.x, y: pos.y }, { x: pos.x + 64, y: pos.y }, { altKey: true });
+  ok('Alt+drag duplicates the group', A.state.items.length === nAlt + 3, `got ${A.state.items.length}`);
+  ok('Alt+drag leaves originals in place', byId(a.id).x === pos.x && byId(a.id).y === pos.y);
+
+  // --- undo ---------------------------------------------------------------
+  const nUndo = A.state.items.length;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('one Ctrl+Z undoes the Alt+drag duplicate', A.state.items.length === nUndo - 3, `got ${A.state.items.length}`);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }));
+  await frame();
+  ok('redo restores it', A.state.items.length === nUndo, `got ${A.state.items.length}`);
+
+  // --- ungroup ------------------------------------------------------------
+  A.setSelection([a.id]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'G', ctrlKey: true, shiftKey: true, bubbles: true }));
+  await frame();
+  ok('Ctrl+Shift+G clears group', byId(a.id).group == null, `group=${byId(a.id).group}`);
+
+  // --- delete never touches disk -----------------------------------------
+  A.setSelection([a.id]);
+  const nDel = A.state.items.length;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  await frame();
+  ok('Delete removes the instance', A.state.items.length === nDel - 1, `got ${A.state.items.length}`);
+  const files = await (await fetch('/files')).json();
+  ok('Delete left all 15 files on disk', files.files.length === 15, `got ${files.files.length}`);
+
+  // --- missing file placeholder ------------------------------------------
+  const ghost = A.addInstance('deleted-from-disk.png', 256, 256);
+  A.render();
+  await frame();
+  ok('missing src renders as placeholder', el(ghost.id)?.classList.contains('missing'));
+
+  // --- save round-trip ----------------------------------------------------
+  A.markDirty();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }));
+  for (let i = 0; i < 100 && A.state.dirty; i++) await new Promise(r => setTimeout(r, 25));
+  ok('Ctrl+S clears the dirty flag', A.state.dirty === false);
+  const reloaded = await (await fetch('/files')).json();
+  ok('layout persisted to disk', !!reloaded.layout && Array.isArray(reloaded.layout.items),
+     reloaded.layout ? `items=${reloaded.layout.items.length}` : 'layout=null');
+  ok('persisted grid matches state', reloaded.layout?.grid === A.state.grid);
+  ok('persisted item count matches', reloaded.layout?.items.length === A.state.items.length,
+     `${reloaded.layout?.items.length} vs ${A.state.items.length}`);
+
+  // --- palette drag-out ---------------------------------------------------
+  A.setSelection([]);
+  const nPal = A.state.items.length;
+  // app.js rebuilds the palette DOM on every render(), so never hold a stale node
+  const gearEl = () => document.querySelector('.palette-item[data-src="gear.png"]');
+  const src = gearEl();
+  const dest = pt(512, 320); // {clientX, clientY}
+  const srcRect = src.getBoundingClientRect();
+  const from = { clientX: srcRect.left + srcRect.width / 2, clientY: srcRect.top + srcRect.height / 2 };
+  ev('pointerdown', src, from);
+  await frame();
+  ev('pointermove', vp, { clientX: dest.clientX, clientY: dest.clientY });
+  await frame();
+  ev('pointerup', vp, { clientX: dest.clientX, clientY: dest.clientY });
+  await frame();
+  ok('palette drag-out spawns an instance', A.state.items.length === nPal + 1, `got ${A.state.items.length}`);
+  const spawned = A.state.items[A.state.items.length - 1];
+  ok('spawned instance has the dragged src', spawned?.src === 'gear.png', String(spawned?.src));
+  ok('spawned instance is snapped to grid', spawned.x % 32 === 0 && spawned.y % 32 === 0, `(${spawned.x},${spawned.y})`);
+  ok('palette still lists 15 files after spawn', document.querySelectorAll('.palette-item').length === 15);
+
+  // duplicate the same file again -> two independent instances of one image
+  const nPal2 = A.state.items.length;
+  ev('pointerdown', gearEl(), from);
+  await frame();
+  ev('pointermove', vp, { clientX: dest.clientX + 100, clientY: dest.clientY });
+  await frame();
+  ev('pointerup', vp, { clientX: dest.clientX + 100, clientY: dest.clientY });
+  await frame();
+  const gears = A.state.items.filter(i => i.src === 'gear.png');
+  ok('same image can appear multiple times', gears.length === 2, `gear instances=${gears.length}`);
+  ok('the two instances have distinct ids', gears[0].id !== gears[1].id);
+
+  // --- palette drag-out, cancelled ---------------------------------------
+  const nCancel = A.state.items.length;
+  ev('pointerdown', gearEl(), from);
+  await frame();
+  ev('pointermove', vp, { clientX: dest.clientX, clientY: dest.clientY });   // out over canvas
+  await frame();
+  ev('pointermove', vp, from);                                    // back over palette
+  await frame();
+  ev('pointerup', vp, from);
+  await frame();
+  ok('cancelled drag-out leaves no instance', A.state.items.length === nCancel, `got ${A.state.items.length}`);
+  // net-zero history: one undo must remove the PREVIOUS real action (the 2nd gear),
+  // not merely replay the cancelled gesture.
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('cancelled drag-out costs no undo step', A.state.items.length === nCancel - 1, `got ${A.state.items.length}`);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }));
+  await frame();
+
+  // --- zoom ---------------------------------------------------------------
+  const z0 = A.state.view.zoom;
+  vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, ctrlKey: true, bubbles: true, cancelable: true, clientX: 600, clientY: 400 }));
+  await frame();
+  ok('Ctrl+wheel zooms in', A.state.view.zoom > z0, `${z0} -> ${A.state.view.zoom}`);
+  for (let i = 0; i < 12; i++) vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, ctrlKey: true, bubbles: true, cancelable: true, clientX: 600, clientY: 400 }));
+  await frame();
+  ok('zoom clamps at 4x', A.state.view.zoom <= 4.0001, String(A.state.view.zoom));
+
+  // --- slicer: clipboard import -------------------------------------------
+  const SL = await import('/slice.js');
+  note('slice.js imported');
+
+  // A 64x32 source: left half opaque red, right half opaque blue, so an
+  // exported slice can be checked by its pixels, not just its size.
+  const slSrc = document.createElement('canvas');
+  slSrc.width = 64; slSrc.height = 32;
+  const slCtx = slSrc.getContext('2d');
+  slCtx.fillStyle = '#ff0000'; slCtx.fillRect(0, 0, 32, 32);
+  slCtx.fillStyle = '#0000ff'; slCtx.fillRect(32, 0, 32, 32);
+  const slBlob = await new Promise(r => slSrc.toBlob(r, 'image/png'));
+
+  SL.openSlicer(slBlob);
+  for (let i = 0; i < 100 && !SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  ok('paste opens the slicer', SL.isOpen());
+  ok('slicer overlay is visible', document.querySelector('.slicer-overlay')?.hidden === false);
+  ok('slicer reads the image size', SL._internals.S.w === 64 && SL._internals.S.h === 32,
+     `${SL._internals.S.w}x${SL._internals.S.h}`);
+  ok('one uncut image is one slice', SL._internals.selectedCells().length === 1);
+
+  // even split
+  SL._internals.splitEvenly(2, 2);
+  await frame();
+  ok('2x2 split yields 4 slices', SL._internals.selectedCells().length === 4,
+     `got ${SL._internals.selectedCells().length}`);
+  ok('2x2 split draws 2 guides', document.querySelectorAll('.slicer-guide').length === 2,
+     `got ${document.querySelectorAll('.slicer-guide').length}`);
+  const slC00 = SL._internals.selectedCells()[0];
+  ok('slice geometry is exact', slC00.x === 0 && slC00.y === 0 && slC00.w === 32 && slC00.h === 16,
+     `${slC00.x},${slC00.y} ${slC00.w}x${slC00.h}`);
+
+  // deselect one cell by clicking it
+  const slCells = () => [...document.querySelectorAll('.slicer-cell')];
+  ev('pointerdown', slCells()[3], {});
+  window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
+  await frame();
+  ok('clicking a slice excludes it', SL._internals.selectedCells().length === 3,
+     `got ${SL._internals.selectedCells().length}`);
+  ok('excluded slice is marked in the UI', slCells()[3].classList.contains('off'));
+
+  // a new cut must not scramble which slCells were excluded
+  SL._internals.addGuide('v', 40);
+  await frame();
+  const slSel = SL._internals.selectedCells();
+  // r1c2 (x 32..64, centre x=48) split into 32..40 and 40..64; the exclusion
+  // must follow the centre into 40..64, not stay pinned to the cell index.
+  ok('adding a cut keeps the exclusion anchored',
+     slSel.length === 5 && !slSel.some(c => c.r === 1 && c.x === 40),
+     `selected=${slSel.length}, row2 x=${slSel.filter(c => c.r === 1).map(c => c.x).join('/')}`);
+
+  // Reopen for the import round-trip: a fresh paste resets cuts and exclusions.
+  SL.openSlicer(slBlob);
+  for (let i = 0; i < 100 && !SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  SL._internals.splitEvenly(2, 2);
+  await frame();
+  ok('reopening resets the previous exclusions', SL._internals.selectedCells().length === 4,
+     `got ${SL._internals.selectedCells().length}`);
+  document.getElementById('slicer-prefix').value = 'zzslicetest';
+  document.getElementById('slicer-prefix').dispatchEvent(new Event('input', { bubbles: true }));
+  await frame();
+  ok('names follow the prefix', SL._internals.stemFor(0, 0) === 'zzslicetest-r1c1',
+     SL._internals.stemFor(0, 0));
+
+  // rename one slice by hand
+  const slNameInput = document.querySelectorAll('.slicer-list-name')[1];
+  slNameInput.value = 'zzslicetest-custom';
+  slNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  ok('a slice can be renamed', SL._internals.stemFor(0, 1) === 'zzslicetest-custom',
+     SL._internals.stemFor(0, 1));
+
+  const nFilesBefore = A.state.files.size;
+  await SL._internals.doImport();
+  for (let i = 0; i < 100 && SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  ok('import closes the slicer', !SL.isOpen());
+
+  const slAfter = await (await fetch('/files')).json();
+  const slImported = slAfter.files.filter(f => f.name.startsWith('zzslicetest'));
+  ok('import wrote every selected slice', slImported.length === 4, `got ${slImported.length}`);
+  ok('import used the custom name', slImported.some(f => f.name === 'zzslicetest-custom.png'),
+     slImported.map(f => f.name).join(','));
+  ok('import used the auto names', slImported.some(f => f.name === 'zzslicetest-r2c2.png'));
+  ok('palette picked up the new files without a reload',
+     A.state.files.size === nFilesBefore + 4 && A.state.files.has('zzslicetest-r1c1.png'),
+     `files=${A.state.files.size}`);
+  ok('new files are draggable palette entries',
+     !!document.querySelector('.palette-item[data-src="zzslicetest-r1c1.png"]'));
+  ok('import left the original files alone', slAfter.files.filter(f => f.name === 'sun.png').length === 1);
+
+  // the written bytes must be the right crop, at the right size
+  // A missing file must fail the assertion, not stall the suite forever.
+  const loadImg = (url) => new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error(`could not load ${url}`));
+    setTimeout(() => rej(new Error(`timed out loading ${url}`)), 5000);
+    im.src = url;
+  });
+  const slProbe = await loadImg('/img/zzslicetest-r1c1.png');
+  ok('slice has the cell dimensions', slProbe.naturalWidth === 32 && slProbe.naturalHeight === 16,
+     `${slProbe.naturalWidth}x${slProbe.naturalHeight}`);
+  const slPc = document.createElement('canvas');
+  slPc.width = slProbe.naturalWidth; slPc.height = slProbe.naturalHeight;
+  slPc.getContext('2d').drawImage(slProbe, 0, 0);
+  const slPx = slPc.getContext('2d').getImageData(4, 4, 1, 1).data;
+  ok('top-left slice carries the top-left pixels', slPx[0] > 200 && slPx[2] < 60, `rgb(${slPx[0]},${slPx[1]},${slPx[2]})`);
+
+  const slProbe2 = await loadImg('/img/zzslicetest-custom.png');
+  const slPc2 = document.createElement('canvas');
+  slPc2.width = 32; slPc2.height = 16;
+  slPc2.getContext('2d').drawImage(slProbe2, 0, 0);
+  const slPx2 = slPc2.getContext('2d').getImageData(4, 4, 1, 1).data;
+  ok('the right-hand slice carries the right-hand pixels', slPx2[2] > 200 && slPx2[0] < 60,
+     `rgb(${slPx2[0]},${slPx2[1]},${slPx2[2]})`);
+
+  // resize option
+  SL.openSlicer(slBlob);
+  for (let i = 0; i < 100 && !SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  document.getElementById('slicer-resize').checked = true;
+  document.getElementById('slicer-resize-w').value = '24';
+  document.getElementById('slicer-resize-h').value = '24';
+  document.getElementById('slicer-prefix').value = 'zzslicetestfixed';
+  document.getElementById('slicer-prefix').dispatchEvent(new Event('input', { bubbles: true }));
+  await SL._internals.doImport();
+  for (let i = 0; i < 100 && SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  const slProbe3 = await loadImg('/img/zzslicetestfixed.png');
+  ok('resize writes slices at the requested size',
+     slProbe3.naturalWidth === 24 && slProbe3.naturalHeight === 24, `${slProbe3.naturalWidth}x${slProbe3.naturalHeight}`);
+
+  // importing the same names again must not clobber what is already there
+  SL.openSlicer(slBlob);
+  for (let i = 0; i < 100 && !SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  document.getElementById('slicer-prefix').value = 'zzslicetestfixed';
+  document.getElementById('slicer-prefix').dispatchEvent(new Event('input', { bubbles: true }));
+  await SL._internals.doImport();
+  for (let i = 0; i < 100 && SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  const slAfter2 = await (await fetch('/files')).json();
+  ok('a name clash is written alongside, never over',
+     slAfter2.files.some(f => f.name === 'zzslicetestfixed-2.png')
+     && slAfter2.files.some(f => f.name === 'zzslicetestfixed.png'),
+     slAfter2.files.filter(f => f.name.startsWith('zzslicetestfixed')).map(f => f.name).join(','));
+
+  // Esc closes without importing, and app.js must not see the key
+  SL.openSlicer(slBlob);
+  for (let i = 0; i < 100 && !SL.isOpen(); i++) await new Promise(r => setTimeout(r, 20));
+  const nItemsEsc = A.state.items.length;
+  A.setSelection(A.state.items.map(it => it.id));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+  ok('Esc closes the slicer', !SL.isOpen());
+  const slAfter3 = await (await fetch('/files')).json();
+  ok('Esc imports nothing', slAfter3.files.length === slAfter2.files.length,
+     `${slAfter2.files.length} -> ${slAfter3.files.length}`);
+  ok('slicer keys do not leak to the board', A.state.selection.size === A.state.items.length);
+  ok('board items untouched by the slicer', A.state.items.length === nItemsEsc);
+
+} catch (err) {
+  fail++;
+  out.push(`FAIL  threw: ${err && err.stack ? err.stack : err}`);
+}
+
+out.push('', `${pass} passed, ${fail} failed`);
+flush();
+document.title = `selftest ${pass}/${pass + fail}`;
+</script>

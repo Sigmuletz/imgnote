@@ -1,0 +1,663 @@
+/* imgnote — styles
+   Dark board by default; [data-theme="light"] on <html> redefines the tokens. */
+
+:root {
+  --bg: #1a1a1c;
+  --dot: #2e2e33;
+  --panel-bg: #202024;
+  --panel-border: #303036;
+  --text: #e4e4e7;
+  --text-dim: #9a9aa2;
+  --accent: #5b8def;
+  --accent-soft: rgba(91, 141, 239, 0.18);
+  --missing-border: #6b6b74;
+  --input-bg: #17171a;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f4f5;
+  --dot: #d8d8dc;
+  --panel-bg: #ffffff;
+  --panel-border: #dcdce0;
+  --text: #1c1c1f;
+  --text-dim: #6a6a72;
+  --accent: #3465d4;
+  --accent-soft: rgba(52, 101, 212, 0.14);
+  --missing-border: #b6b6be;
+  --input-bg: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+button, input {
+  font-family: inherit;
+}
+
+/* ---------- layout ---------- */
+
+#app {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "palette toolbar"
+    "palette viewport"
+    "palette statusbar";
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  transition: grid-template-columns 120ms ease;
+}
+
+#app.palette-collapsed {
+  grid-template-columns: 0 1fr;
+}
+
+#app.palette-collapsed #palette {
+  overflow: hidden;
+  border-right-color: transparent;
+}
+
+/* ---------- palette ---------- */
+
+#palette {
+  grid-area: palette;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--panel-border);
+  overflow: hidden;
+}
+
+#palette-header {
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+#palette-filter {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+#palette-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#palette-list {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  align-content: start;
+  gap: 6px;
+  padding: 8px;
+}
+
+.palette-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 2px;
+  border-radius: 6px;
+  cursor: grab;
+  text-align: center;
+  user-select: none;
+}
+
+.palette-item:hover {
+  background: var(--accent-soft);
+}
+
+.palette-item img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  background: var(--input-bg);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.palette-name {
+  font-size: 10px;
+  color: var(--text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- toolbar ---------- */
+
+#toolbar {
+  grid-area: toolbar;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 6px 12px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 12px;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#grid-size {
+  width: 56px;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+#toolbar button {
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 9px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+#toolbar button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+#toolbar button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.align-group {
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--panel-border);
+}
+
+/* ---------- viewport / canvas ---------- */
+
+#viewport {
+  grid-area: viewport;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+#grid-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.5px);
+  background-repeat: repeat;
+}
+
+#canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  line-height: 0;
+}
+
+.item img {
+  display: block;
+  user-select: none;
+}
+
+.item.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.item.missing {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px dashed var(--missing-border);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.missing-name {
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+#hull-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.hull {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+#marquee {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ---------- statusbar ---------- */
+
+#statusbar {
+  grid-area: statusbar;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel-bg);
+  border-top: 1px solid var(--panel-border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- slicer (clipboard import) ---------- */
+
+.slicer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.slicer-overlay[hidden] {
+  display: none;
+}
+
+.slicer-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 100%);
+  height: min(760px, 100%);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.slicer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.slicer-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.slicer-dims {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.slicer-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.slicer-close:hover {
+  color: var(--text);
+}
+
+.slicer-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* -- stage -- */
+
+.slicer-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.slicer-frame {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px auto;
+  grid-template-rows: 18px auto;
+}
+
+.slicer-ruler {
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+}
+
+.slicer-ruler-top {
+  grid-column: 2;
+  grid-row: 1;
+  height: 18px;
+  cursor: col-resize;
+}
+
+.slicer-ruler-left {
+  grid-column: 1;
+  grid-row: 2;
+  width: 18px;
+  cursor: row-resize;
+}
+
+.slicer-plane {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  line-height: 0;
+  /* Checkerboard, so transparent slices are readable against any theme. */
+  background-color: #6e6e76;
+  background-image:
+    linear-gradient(45deg, #5a5a62 25%, transparent 25%, transparent 75%, #5a5a62 75%),
+    linear-gradient(45deg, #5a5a62 25%, transparent 25%, transparent 75%, #5a5a62 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.slicer-img {
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.slicer-cells,
+.slicer-guides {
+  position: absolute;
+  inset: 0;
+}
+
+.slicer-guides {
+  pointer-events: none;
+}
+
+.slicer-cell {
+  position: absolute;
+  cursor: pointer;
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+  outline-offset: -1px;
+}
+
+.slicer-cell:hover {
+  background: var(--accent-soft);
+}
+
+/* Excluded slices are dimmed and hatched, so "not importing this" reads at a
+   glance even on a busy sheet. */
+.slicer-cell.off {
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(0, 0, 0, 0.55) 0 5px, rgba(0, 0, 0, 0.3) 5px 10px);
+}
+
+.slicer-guide {
+  position: absolute;
+  pointer-events: auto;
+  background: var(--accent);
+}
+
+.slicer-guide.doomed {
+  opacity: 0.3;
+}
+
+.slicer-guide-v {
+  top: -18px;
+  bottom: 0;
+  width: 1px;
+  margin-left: -4.5px;   /* pull the padding box back over the 4px grab border */
+  cursor: col-resize;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  background-clip: padding-box;
+  box-sizing: content-box;
+}
+
+.slicer-guide-h {
+  left: -18px;
+  right: 0;
+  height: 1px;
+  margin-top: -4.5px;    /* ditto, vertically */
+  cursor: row-resize;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  background-clip: padding-box;
+  box-sizing: content-box;
+}
+
+/* -- side panel -- */
+
+.slicer-side {
+  width: 260px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 14px;
+  border-left: 1px solid var(--panel-border);
+  overflow: hidden;
+}
+
+.slicer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.slicer-section:last-child {
+  flex: 1;
+}
+
+.slicer-side h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.slicer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.slicer-row label {
+  color: var(--text-dim);
+}
+
+.slicer-side input[type="number"] {
+  width: 52px;
+}
+
+.slicer-side input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.slicer-side input[type="text"],
+.slicer-side input[type="number"] {
+  padding: 4px 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.slicer-side input:focus,
+.slicer-list input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.slicer-side button,
+.slicer-foot button {
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.slicer-side button:hover,
+.slicer-foot button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.slicer-wide {
+  width: 100%;
+}
+
+.slicer-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.slicer-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.slicer-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.slicer-list-pos {
+  flex: none;
+  width: 44px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.slicer-list-name {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 5px;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.slicer-list-ext {
+  flex: none;
+  color: var(--text-dim);
+}
+
+/* -- footer -- */
+
+.slicer-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.slicer-note {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.slicer-primary {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+.slicer-foot button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

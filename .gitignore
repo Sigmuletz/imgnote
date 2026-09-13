@@ -1,0 +1,9 @@
+# Layout files written by the app inside image folders
+.imgnote.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Tooling
+.lean-ctx/

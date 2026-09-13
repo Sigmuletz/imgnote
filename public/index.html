@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>imgnote</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="palette">
+      <div id="palette-header">
+        <input id="palette-filter" type="text" placeholder="Filter files…" autocomplete="off" spellcheck="false">
+      </div>
+      <div id="palette-list"></div>
+    </aside>
+
+    <main id="viewport">
+      <div id="grid-layer"></div>
+      <div id="canvas">
+        <svg id="hull-layer"></svg>
+      </div>
+      <div id="marquee" hidden></div>
+    </main>
+
+    <div id="toolbar">
+      <div class="toolbar-group">
+        <label for="grid-size">Grid</label>
+        <input id="grid-size" type="number" min="2" step="1" value="32">
+      </div>
+
+      <label class="toolbar-group">
+        <input id="show-grid" type="checkbox" checked>
+        Show grid
+      </label>
+
+      <button id="theme-toggle" type="button" title="Toggle theme">Light</button>
+
+      <button id="paste-image" type="button" title="Paste an image from the clipboard and slice it (Ctrl+V)">Paste image…</button>
+
+      <div class="toolbar-group align-group" id="align-group">
+        <button id="align-left" type="button" title="Align left" disabled>&#8676;</button>
+        <button id="align-center-x" type="button" title="Align center (horizontal)" disabled>&#8596;</button>
+        <button id="align-right" type="button" title="Align right" disabled>&#8677;</button>
+        <button id="align-top" type="button" title="Align top" disabled>&#8670;</button>
+        <button id="align-center-y" type="button" title="Align center (vertical)" disabled>&#8597;</button>
+        <button id="align-bottom" type="button" title="Align bottom" disabled>&#8671;</button>
+        <button id="distribute-x" type="button" title="Distribute horizontally" disabled>&#8633;</button>
+        <button id="distribute-y" type="button" title="Distribute vertically" disabled>&#8634;</button>
+      </div>
+    </div>
+
+    <div id="statusbar"></div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

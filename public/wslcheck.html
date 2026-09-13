@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>wsl check</title><pre id="r">…</pre>
+<script type="module">
+const out=[];
+const files=(await (await fetch('/files')).json()).files;
+out.push(`served files: ${files.length}`);
+for (const f of files) {
+  const url = `/img/${encodeURIComponent(f.name)}`;
+  const img = new Image();
+  const ok = await new Promise(res => {
+    img.onload = () => res(true); img.onerror = () => res(false); img.src = url;
+  });
+  out.push(`${ok ? 'LOAD' : 'FAIL'}  ${String(img.naturalWidth).padStart(4)}x${String(img.naturalHeight).padEnd(4)}  ${f.name}`);
+}
+document.getElementById('r').textContent = out.join('\n');
+</script>
