@@ -7,3 +7,7 @@ __pycache__/
 
 # Tooling
 .lean-ctx/
+
+# Libraries
+OLD/
+puzzle*/
