@@ -57,11 +57,12 @@ of line rules carries a top-level `rules` library and a `rules` id array on each
   "items": [ { "id": "i1", "src": "sun.png", "x": 128, "y": 96, "group": null } ],
   "frames": [],
   "lines": [ { "id": "l1", "a": "i1", "b": "i2", "rules": ["r1"] } ],
-  "rules": [ { "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null } ]
+  "rules": [ { "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null, "invert": false } ]
 }
 ```
 
-A missing `"rules"` key — on the layout or on a line — reads as `[]`.
+A missing `"rules"` key — on the layout or on a line — reads as `[]`. `invert` is always
+written; a missing or non-boolean `invert` reads as `false`.
 
 Unknown paths return 404. All responses set `Cache-Control: no-store`.
 
@@ -108,7 +109,12 @@ Unknown paths return 404. All responses set `Cache-Control: no-store`.
   </main>
   <aside id="rules-panel" hidden>  <!-- right dock; shown only while a line is selected -->
     <div id="rules-header">…</div>       <!-- LINE a → b, live signed dx/dy -->
-    <div id="rules-list">…</div>         <!-- attached rules: ✓/✗, bounds, detach, delete -->
+    <div id="rules-list">               <!-- attached rules: ✓/✗, bounds, detach, delete -->
+      <div class="rule-row inverted">   <!-- `inverted` while the row's rule has invert set -->
+        <div class="rule-head">…</div>  <!-- name + the `not` checkbox -->
+        <div class="rule-axis">…</div>  <!-- x2: the per-axis toggle and min..max -->
+      </div>
+    </div>
     <div id="rules-actions">…</div>      <!-- [+ attach ▾] [new rule] [⇄ swap ends] -->
   </aside>
   <div id="toolbar">…</div>
@@ -153,6 +159,10 @@ not the document, and paints no head at all. The `<defs>` is rebuilt by the same
 self-healing path that rebuilds the layer, so a constrained line can never be left
 pointing at a marker that does not exist.
 
+A rule row carries `inverted` while its rule's `invert` is set (`.rule-row.inverted`),
+so the row and each of its `.rule-axis` children can show the negated reading; like the
+line classes it is derived at render time, from `rule.invert`.
+
 `#app` is a CSS **grid** of three columns, `var(--palette-w) 1fr var(--rules-w)`.
 `#rules-panel` is the third column, mirroring `#palette` in the first: `--rules-w` is
 `0px` until `#app` carries `rules-open`, which widens it to `240px`. So the panel
@@ -173,7 +183,8 @@ export const state;
 //   groups: [ { id } ],
 //   frames: [ { id, x, y, w, h, title } ], // drawn under every item
 //   lines:  [ { id, a, b, rules: [ruleId] } ], // a/b are item ids; geometry is derived
-//   rules:  [ { id, name, x: {min,max}|null, y: {min,max}|null } ], // per-board library
+//   rules:  [ { id, name, x: {min,max}|null, y: {min,max}|null, invert: boolean } ],
+//                                          // per-board library; invert negates the whole rule
 //   selection: Set<string>,                // item ids
 //   frameSelection: Set<string>,           // frame ids
 //   lineSelection: Set<string>,            // line ids; only one of the three is ever non-empty
@@ -249,6 +260,14 @@ attached, or every attached id dangling — returns `constrained: false, ok: tru
 empty `results`. Each `results` entry's `x` and `y` is `true`, `false`, or `null` when
 that axis is unconstrained on that rule; the entry's `ok` is the AND of the axes it does
 constrain, and the line's `ok` is the AND of every entry.
+
+A rule with `invert` set negates that entry's `ok`, and only that: the negation is
+applied to the **whole** rule, after the per-axis AND, so a two-axis inverted rule is ok
+as soon as one axis is outside its range. The per-axis `x`/`y` values stay **raw** —
+`true` still means "this axis is inside its range", inverted or not — which is what lets
+the panel blame the axis that decided the verdict: the one reading `false` for a plain
+rule, the one reading `true` for an inverted one. A rule with both axes `null` has
+`ok: true` plain and `ok: false` inverted.
 
 `setModalOpen` stays the slicer's and the frame rename's. The rules panel does not use
 it: `onKeyDown` already returns early for `modalOpen` and for any text input, and each

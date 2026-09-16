@@ -633,6 +633,27 @@ button, input {
   color: var(--line-broken);
 }
 
+/* The inversion flag, sitting with the name because it reads as part of it. */
+.rule-not {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.rule-row.inverted .rule-not {
+  color: var(--text);
+}
+
+/* Repeated on every axis so a glance at a range never reads it backwards. */
+.rule-row.inverted .rule-axis > label::after {
+  content: 'not';
+  font-style: italic;
+}
+
 .rule-axis {
   display: flex;
   align-items: center;
