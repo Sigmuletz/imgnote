@@ -18,10 +18,35 @@
     <main id="viewport">
       <div id="grid-layer"></div>
       <div id="canvas">
-        <svg id="hull-layer"></svg>
+        <div id="frame-layer"></div>
+        <svg id="line-layer" viewBox="-50000 -50000 100000 100000" preserveAspectRatio="none"></svg>
+        <svg id="hull-layer" viewBox="-50000 -50000 100000 100000" preserveAspectRatio="none"></svg>
       </div>
       <div id="marquee" hidden></div>
     </main>
+
+    <!-- Right-hand dock, mirroring #palette. Shown only while a line is
+         selected; it takes a grid column, so it pushes the viewport rather
+         than covering the board it is describing. -->
+    <aside id="rules-panel" hidden>
+      <div id="rules-head">
+        <div id="rules-title">LINE</div>
+        <div id="rules-ends"></div>
+      </div>
+
+      <div id="rules-readout">
+        <span>dx <b id="rules-dx">0</b></span>
+        <span>dy <b id="rules-dy">0</b></span>
+      </div>
+
+      <div id="rules-list"></div>
+
+      <div id="rules-foot">
+        <select id="rules-attach" title="Attach a rule from the library"></select>
+        <button id="rules-new" type="button" title="New rule around this line's current offset">new rule</button>
+        <button id="rules-swap" type="button" title="Swap which end is the origin (S)">&#8644; swap ends</button>
+      </div>
+    </aside>
 
     <div id="toolbar">
       <div class="toolbar-group">
@@ -37,6 +62,10 @@
       <button id="theme-toggle" type="button" title="Toggle theme">Light</button>
 
       <button id="paste-image" type="button" title="Paste an image from the clipboard and slice it (Ctrl+V)">Paste image…</button>
+
+      <button id="add-frame" type="button" title="Add a frame around the selection, or in the middle of the view (Ctrl+B)">Frame</button>
+
+      <button id="line-tool" type="button" title="Line tool: click two icons to connect them (L)">Line</button>
 
       <div class="toolbar-group align-group" id="align-group">
         <button id="align-left" type="button" title="Align left" disabled>&#8676;</button>
