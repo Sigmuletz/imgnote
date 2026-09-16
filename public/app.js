@@ -281,6 +281,10 @@ function axisHolds(range, d) {
  * Measure a line against its rules. Rules combine with AND: one broken rule
  * breaks the line. An id with no rule behind it is skipped rather than failed,
  * so deleting a rule relaxes the lines it governed instead of breaking them.
+ *
+ * A rule with `invert` set passes exactly when it would otherwise fail, which
+ * is how "keep these two apart" is written: the same ranges, read as forbidden
+ * ground rather than required ground.
  */
 export function evaluateLine(line) {
   const a = line && findItem(line.a);
@@ -299,7 +303,11 @@ export function evaluateLine(line) {
     if (!rule) continue;
     const x = axisHolds(rule.x, dx);
     const y = axisHolds(rule.y, dy);
-    const ruleOk = x !== false && y !== false;
+    // `invert` turns the rule into its opposite: the offset now has to land
+    // OUTSIDE the ranges. The axis results stay raw, so the panel can still
+    // point at whichever axis decided the outcome either way.
+    const holds = x !== false && y !== false;
+    const ruleOk = rule.invert ? !holds : holds;
     if (!ruleOk) ok = false;
     results.push({ rule, ok: ruleOk, x, y });
   }
@@ -1372,6 +1380,23 @@ function buildRuleRow(line, rule) {
   );
   head.appendChild(name);
 
+  // Reads as part of the rule's name -- "not row gap" -- because that is what
+  // it does: the ranges below stay put, the verdict flips.
+  const notLabel = document.createElement('label');
+  notLabel.className = 'rule-not';
+  notLabel.title = 'Invert: the rule passes when the offset is OUTSIDE these ranges';
+  const notBox = document.createElement('input');
+  notBox.type = 'checkbox';
+  notBox.checked = !!rule.invert;
+  notBox.addEventListener('change', () => {
+    pushUndo();
+    rule.invert = notBox.checked;
+    commitRuleChange();
+  });
+  notLabel.appendChild(notBox);
+  notLabel.appendChild(document.createTextNode('not'));
+  head.appendChild(notLabel);
+
   head.appendChild(ruleButton('⊘', 'Detach from the selected line(s)', () => {
     pushUndo();
     for (const l of selectedLines()) detachRule(l.id, rule.id);
@@ -1384,6 +1409,7 @@ function buildRuleRow(line, rule) {
   }));
   row.appendChild(head);
 
+  row.classList.toggle('inverted', !!rule.invert);
   row._mark = mark;
   row._actual = {};
   for (const axis of ['x', 'y']) {
@@ -1562,10 +1588,13 @@ function updateRulesReadout() {
     row.classList.toggle('broken', !res.ok);
     row._mark.textContent = res.ok ? '✓' : '✗';
     for (const axis of ['x', 'y']) {
-      // The range is already on screen; only a failing axis needs the live
-      // value spelled out next to it.
+      // The range is already on screen; only an axis that caused the failure
+      // needs the live value spelled out next to it. Which axis that is flips
+      // with the rule: normally the one outside its range, inverted the one
+      // that sat inside it.
+      const blamed = res.rule.invert ? res[axis] === true : res[axis] === false;
       row._actual[axis].textContent =
-        res[axis] === false ? `(${fmtSigned(axis === 'x' ? ev.dx : ev.dy)})` : '';
+        !res.ok && blamed ? `(${fmtSigned(axis === 'x' ? ev.dx : ev.dy)})` : '';
     }
   }
 }
@@ -1593,6 +1622,7 @@ function newRuleForSelection() {
     name: nextRuleName(),
     x: { min: sx - RULE_SLACK, max: sx + RULE_SLACK },
     y: { min: sy - RULE_SLACK, max: sy + RULE_SLACK },
+    invert: false,
   });
   for (const line of lines) attachRule(line.id, rule.id);
   commitRuleChange();
@@ -1778,7 +1808,9 @@ async function save() {
     groups: state.groups.map(({ id }) => ({ id })),
     frames: state.frames.map(({ id, x, y, w, h, title }) => ({ id, x, y, w, h, title })),
     lines: state.lines.map(({ id, a, b, rules }) => ({ id, a, b, rules: [...(rules || [])] })),
-    rules: state.rules.map(({ id, name, x, y }) => ({ id, name, x: cloneRange(x), y: cloneRange(y) })),
+    rules: state.rules.map(({ id, name, x, y, invert }) => ({
+      id, name, x: cloneRange(x), y: cloneRange(y), invert: invert === true,
+    })),
   };
 
   try {
@@ -2093,7 +2125,13 @@ function normalizeRule(raw) {
   const x = normalizeRange(raw.x);
   const y = normalizeRange(raw.y);
   if (x === undefined || y === undefined) return null;
-  return { id: raw.id, name: typeof raw.name === 'string' ? raw.name : raw.id, x, y };
+  return {
+    id: raw.id,
+    name: typeof raw.name === 'string' ? raw.name : raw.id,
+    x,
+    y,
+    invert: raw.invert === true, // anything else, missing included, is the plain reading
+  };
 }
 
 async function boot() {

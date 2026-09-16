@@ -10,13 +10,15 @@
   </aside>
   <main id="viewport">
     <div id="grid-layer"></div>
-    <div id="canvas"><svg id="hull-layer"></svg></div>
+    <div id="canvas"><div id="frame-layer"></div><svg id="line-layer" viewBox="-50000 -50000 100000 100000" preserveAspectRatio="none"></svg><svg id="hull-layer" viewBox="-50000 -50000 100000 100000" preserveAspectRatio="none"></svg></div>
     <div id="marquee" hidden></div>
   </main>
   <div id="toolbar">
     <input id="grid-size" type="number" value="32">
     <input id="show-grid" type="checkbox" checked>
     <button id="theme-toggle">theme</button>
+    <button id="add-frame">frame</button>
+    <button id="line-tool">line</button>
   </div>
   <div id="statusbar"></div>
 </div>
@@ -413,6 +415,418 @@ try {
      `${slAfter2.files.length} -> ${slAfter3.files.length}`);
   ok('slicer keys do not leak to the board', A.state.selection.size === A.state.items.length);
   ok('board items untouched by the slicer', A.state.items.length === nItemsEsc);
+
+  // ---- frames -------------------------------------------------------------
+  note('frames');
+  A.state.grid = 32;
+  A.setSelection([]);
+  const fr = A.addFrame();
+  ok('addFrame creates one frame', A.state.frames.length === 1, `got ${A.state.frames.length}`);
+  ok('new frame has a default title', fr.title === 'Frame', String(fr.title));
+  ok('new frame is selected', A.state.frameSelection.has(fr.id));
+
+  // the frame layer must come before the items, so frames paint underneath
+  const canvasKids = [...document.getElementById('canvas').children].map(n => n.id || n.className);
+  ok('frame layer paints below the items', canvasKids[0] === 'frame-layer', canvasKids.slice(0, 3).join(','));
+
+  Object.assign(fr, { x: 1024, y: 1024, w: 256, h: 256 });
+  A.renderTransforms();
+  const frInside = A.addInstance('sun.png', 1088, 1088);
+  const frOutside = A.addInstance('sun.png', 1600, 1000);
+  await frame();
+
+  ok('the frame carries what stands on it', A.itemsInFrame(fr).some(i => i.id === frInside.id));
+  ok('the frame ignores what stands outside it', !A.itemsInFrame(fr).some(i => i.id === frOutside.id));
+
+  const frEdge = () => document.querySelector(`.frame[data-id="${fr.id}"] .frame-edge[data-edge="top"]`);
+  await dragFrom(frEdge(), { x: 1152, y: 1024 }, { x: 1216, y: 1088 });
+  ok('dragging an edge moves the frame', fr.x === 1088 && fr.y === 1088, `(${fr.x},${fr.y})`);
+  ok('contents move with the frame', byId(frInside.id).x === 1152 && byId(frInside.id).y === 1152,
+     `(${byId(frInside.id).x},${byId(frInside.id).y})`);
+  ok('items outside stay put', byId(frOutside.id).x === 1600 && byId(frOutside.id).y === 1000,
+     `(${byId(frOutside.id).x},${byId(frOutside.id).y})`);
+
+  const frHandle = () => document.querySelector(`.frame[data-id="${fr.id}"] .frame-handle[data-dir="se"]`);
+  await dragFrom(frHandle(), { x: 1344, y: 1344 }, { x: 1408, y: 1376 });
+  ok('the se handle resizes the frame', fr.w === 320 && fr.h === 288, `${fr.w}x${fr.h}`);
+  ok('resizing leaves the opposite corner alone', fr.x === 1088 && fr.y === 1088, `(${fr.x},${fr.y})`);
+  ok('resizing does not move the contents', byId(frInside.id).x === 1152, String(byId(frInside.id).x));
+
+  // a resize handle cannot shrink a frame past the minimum
+  await dragFrom(frHandle(), { x: 1408, y: 1376 }, { x: 1024, y: 1024 });
+  ok('a frame cannot be resized below the minimum', fr.w >= A.FRAME_MIN && fr.h >= A.FRAME_MIN,
+     `${fr.w}x${fr.h}`);
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  await frame();
+  const frUndone = A.state.frames.find(f => f.id === fr.id);
+  ok('undo restores the frame size', frUndone && frUndone.w === 320 && frUndone.h === 288,
+     `${frUndone?.w}x${frUndone?.h}`);
+
+  // Undo restores cloned frames, so anything after an undo has to re-look-up.
+  const frNow = () => A.state.frames.find(f => f.id === fr.id);
+
+  // A click on a frame that moves nothing must not cost a history step: the
+  // next Ctrl+Z has to reach past it, to the resize before it.
+  const frClick = pt(frNow().x + frNow().w / 2, frNow().y);
+  ev('pointerdown', frEdge(), frClick);
+  await frame();
+  ev('pointerup', vp, frClick);
+  await frame();
+  ok('a click on a frame moves nothing', frNow().w === 320 && frNow().h === 288,
+     `${frNow().w}x${frNow().h}`);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('a click on a frame costs no undo step', frNow().w === 256 && frNow().h === 256,
+     `${frNow().w}x${frNow().h}`);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('redo brings the resize back', frNow().w === 320 && frNow().h === 288,
+     `${frNow().w}x${frNow().h}`);
+
+  // renaming: a second click on the title opens the field in place
+  const frTitle = () => document.querySelector(`.frame[data-id="${fr.id}"] .frame-title`);
+  const titleAt = () => pt(frNow().x + frNow().w / 2, frNow().y);
+  ev('pointerdown', frTitle(), { ...titleAt(), detail: 2 });
+  await frame();
+  ok('a second click on the title opens the rename field', frTitle().isContentEditable === true);
+  ok('the open field is marked as editing', frTitle().classList.contains('editing'));
+
+  frTitle().textContent = 'Weather';
+  frTitle().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await frame();
+  ok('Enter commits the new title', frNow().title === 'Weather', String(frNow().title));
+  ok('the field closes after committing', frTitle().isContentEditable === false);
+
+  const frSelBefore = A.state.frameSelection.size;
+  ev('pointerdown', frTitle(), { ...titleAt(), detail: 2 });
+  await frame();
+  frTitle().textContent = 'Scratch';
+  frTitle().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await frame();
+  ok('Esc reverts the title', frNow().title === 'Weather', String(frNow().title));
+  ok('Esc restores the displayed text', frTitle().textContent === 'Weather', frTitle().textContent);
+  ok('rename keys do not leak to the board', A.state.frameSelection.size === frSelBefore,
+     `${frSelBefore} -> ${A.state.frameSelection.size}`);
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }));
+  for (let i = 0; i < 100 && A.state.dirty; i++) await new Promise(r => setTimeout(r, 20));
+  const frSaved = await (await fetch('/files')).json();
+  ok('frames persist to the layout file', (frSaved.layout?.frames || []).length === 1,
+     JSON.stringify(frSaved.layout?.frames));
+  ok('the frame title persists', frSaved.layout?.frames?.[0]?.title === 'Weather',
+     String(frSaved.layout?.frames?.[0]?.title));
+
+  const frItemsBefore = A.state.items.length;
+  A.setFrameSelection([fr.id]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  await frame();
+  ok('Delete removes the frame', A.state.frames.length === 0, `got ${A.state.frames.length}`);
+  ok('Delete keeps what stood inside it', A.state.items.length === frItemsBefore,
+     `${frItemsBefore} -> ${A.state.items.length}`);
+
+
+  // ---- lines --------------------------------------------------------------
+  note('lines');
+  A.setSelection([]);
+  const lnA = A.addInstance('sun.png', 2048, 2048);
+  const lnB = A.addInstance('gear.png', 2432, 2048);
+  const lnC = A.addInstance('star.png', 2048, 2432);
+  await frame();
+
+  const canvasOrder = [...document.getElementById('canvas').children].map(n => n.id || n.className);
+  ok('lines paint above frames and below the icons',
+     canvasOrder.indexOf('frame-layer') === 0 && canvasOrder.indexOf('line-layer') === 1
+     && canvasOrder.indexOf('item') > 1, canvasOrder.slice(0, 4).join(','));
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }));
+  await frame();
+  ok('L enters the line tool', A.isLineMode() === true);
+  ok('the viewport shows the tool is armed', vp.classList.contains('line-mode'));
+
+  const lnClick = (id) => {
+    const it = byId(id);
+    const e = el(id);
+    ev('pointerdown', e, pt(it.x + (e._w || 64) / 2, it.y + (e._h || 64) / 2));
+  };
+
+  lnClick(lnA.id);
+  await frame();
+  ok('the first click arms an anchor', A.pendingLineAnchor() === lnA.id, String(A.pendingLineAnchor()));
+  ok('the anchor icon is marked', el(lnA.id).classList.contains('line-anchor'));
+  ok('no line exists yet', A.state.lines.length === 0);
+
+  lnClick(lnB.id);
+  await frame();
+  ok('the second click draws the line', A.state.lines.length === 1, `got ${A.state.lines.length}`);
+  ok('the line records both endpoints',
+     A.state.lines[0].a === lnA.id && A.state.lines[0].b === lnB.id);
+  ok('the anchor is cleared after connecting', A.pendingLineAnchor() === null);
+  ok('the tool stays armed for the next line', A.isLineMode() === true);
+
+  const lnEl = (id) => document.querySelector(`.line-group[data-id="${id}"] .line`);
+  const lnCoords = (id) => {
+    const e = lnEl(id);
+    return ['x1', 'y1', 'x2', 'y2'].map(k => Number(e.getAttribute(k)));
+  };
+  const centre = (id) => {
+    const it = byId(id), e = el(id);
+    return [it.x + (e._w || 64) / 2, it.y + (e._h || 64) / 2];
+  };
+  const ln1 = A.state.lines[0];
+  ok('the line runs centre to centre',
+     String(lnCoords(ln1.id)) === String([...centre(lnA.id), ...centre(lnB.id)]),
+     `${lnCoords(ln1.id)} vs ${[...centre(lnA.id), ...centre(lnB.id)]}`);
+
+  // several lines may leave the same icon
+  lnClick(lnA.id);
+  await frame();
+  lnClick(lnC.id);
+  await frame();
+  ok('a second line can leave the same icon', A.state.lines.length === 2, `got ${A.state.lines.length}`);
+  ok('both lines start from the same icon',
+     A.state.lines.filter(l => l.a === lnA.id || l.b === lnA.id).length === 2);
+
+  // an existing pair is refused, either way round
+  lnClick(lnB.id);
+  await frame();
+  lnClick(lnA.id);
+  await frame();
+  ok('an already-connected pair is refused', A.state.lines.length === 2, `got ${A.state.lines.length}`);
+
+  // clicking the anchor again cancels
+  lnClick(lnA.id);
+  await frame();
+  lnClick(lnA.id);
+  await frame();
+  ok('clicking the anchor twice cancels', A.pendingLineAnchor() === null && A.state.lines.length === 2);
+
+  // Esc drops a half-drawn line first, and only then leaves the tool
+  lnClick(lnA.id);
+  await frame();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+  ok('Esc drops the half-drawn line', A.pendingLineAnchor() === null && A.isLineMode() === true);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+  ok('a second Esc leaves the tool', A.isLineMode() === false);
+  ok('the crosshair cursor is dropped with the tool', !vp.classList.contains('line-mode'));
+
+  // the line follows whichever end moves
+  await dragFrom(el(lnB.id), { x: byId(lnB.id).x + 8, y: byId(lnB.id).y + 8 },
+                             { x: byId(lnB.id).x + 72, y: byId(lnB.id).y + 8 });
+  await frame();
+  ok('the line follows the icon that moved',
+     String(lnCoords(ln1.id).slice(2)) === String(centre(lnB.id)),
+     `${lnCoords(ln1.id).slice(2)} vs ${centre(lnB.id)}`);
+
+  // a line is clickable and deletable on its own
+  const lnMid = pt((lnCoords(ln1.id)[0] + lnCoords(ln1.id)[2]) / 2,
+                   (lnCoords(ln1.id)[1] + lnCoords(ln1.id)[3]) / 2);
+  ev('pointerdown', document.querySelector(`.line-group[data-id="${ln1.id}"] .line-hit`), lnMid);
+  await frame();
+  ok('clicking a line selects it', A.state.lineSelection.has(ln1.id));
+  ok('selecting a line clears the item selection', A.state.selection.size === 0);
+
+  const lnItemsBefore = A.state.items.length;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  await frame();
+  ok('Delete removes the selected line', A.state.lines.length === 1, `got ${A.state.lines.length}`);
+  ok('deleting a line keeps both icons', A.state.items.length === lnItemsBefore);
+
+  // deleting an icon takes its connectors with it
+  A.setSelection([lnC.id]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  await frame();
+  ok('deleting an icon drops the lines that reached it', A.state.lines.length === 0,
+     `got ${A.state.lines.length}`);
+
+  // duplication copies a line only when both of its ends are copied
+  A.setSelection([]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }));
+  await frame();
+  lnClick(lnA.id);
+  await frame();
+  lnClick(lnB.id);
+  await frame();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+  A.setSelection([lnA.id, lnB.id]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, bubbles: true }));
+  await frame();
+  ok('duplicating both ends copies the line', A.state.lines.length === 2, `got ${A.state.lines.length}`);
+  const lnCopy = A.state.lines.find(l => l.a !== lnA.id);
+  ok('the copy connects the copies, not the originals',
+     !!lnCopy && lnCopy.a !== lnA.id && lnCopy.b !== lnB.id);
+
+  A.setSelection([]);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }));
+  for (let i = 0; i < 100 && A.state.dirty; i++) await new Promise(r => setTimeout(r, 20));
+  const lnSaved = await (await fetch('/files')).json();
+  ok('lines persist to the layout file', (lnSaved.layout?.lines || []).length === 2,
+     JSON.stringify(lnSaved.layout?.lines));
+
+  // the tool takes a drag as readily as two clicks, and forgives a near miss:
+  // in line mode the gesture goes by pointer position, not by what it landed on
+  const centreW = (id) => {
+    const it = byId(id), e = el(id);
+    return { x: it.x + (e._w || 64) / 2, y: it.y + (e._h || 64) / 2 };
+  };
+  const lnDown = (wx, wy) => ev('pointerdown', vp, pt(wx, wy));
+  const lnUp = (wx, wy) => ev('pointerup', vp, pt(wx, wy));
+
+  A.setSelection([]);
+  const lnD = A.addInstance('dot.png', 2900, 2048);
+  const lnE = A.addInstance('pause.png', 3300, 2048);
+  await frame();
+  const lnBefore = A.state.lines.length;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }));
+  await frame();
+
+  const dC = centreW(lnD.id), eC = centreW(lnE.id);
+  lnDown(dC.x, dC.y);
+  await frame();
+  ev('pointermove', vp, pt((dC.x + eC.x) / 2, dC.y));
+  await frame();
+  lnUp(eC.x, eC.y);
+  await frame();
+  ok('dragging from one icon onto another connects them',
+     A.state.lines.length === lnBefore + 1, `got ${A.state.lines.length}`);
+
+  // dot.png is 16px square, so a click a few px off it is the normal case
+  const lnG = A.addInstance('dot.png', 2900, 2400);
+  const lnH = A.addInstance('dot.png', 3300, 2400);
+  await frame();
+  const lnBefore2 = A.state.lines.length;
+  const gC = centreW(lnG.id), hC = centreW(lnH.id);
+  ok('the near-miss fixture really is tiny', (el(lnG.id)._w || 64) <= 24,
+     String(el(lnG.id)._w));
+  // The slack is measured in screen px, so the miss has to be too -- the suite
+  // is zoomed in by this point, and 6 world px would be a genuinely far miss.
+  const missW = 6 / A.state.view.zoom;
+  const gMiss = gC.x + (el(lnG.id)._w || 64) / 2 + missW;
+  const hMiss = hC.x + (el(lnH.id)._w || 64) / 2 + missW;
+  lnDown(gMiss, gC.y);
+  await frame();
+  lnUp(gMiss, gC.y);
+  await frame();
+  ok('a near miss still arms the anchor', A.pendingLineAnchor() === lnG.id,
+     String(A.pendingLineAnchor()));
+  lnDown(hMiss, hC.y);
+  await frame();
+  lnUp(hMiss, hC.y);
+  await frame();
+  ok('a near miss still connects', A.state.lines.length === lnBefore2 + 1,
+     `got ${A.state.lines.length}`);
+
+  // a stray click on bare canvas must not silently throw the anchor away
+  const lnBefore3 = A.state.lines.length;
+  lnDown(gC.x, gC.y);
+  await frame();
+  lnUp(gC.x, gC.y);
+  await frame();
+  ok('press and release on one icon leaves it armed', A.pendingLineAnchor() === lnG.id);
+  lnDown(gC.x, gC.y - 300);
+  await frame();
+  lnUp(gC.x, gC.y - 300);
+  await frame();
+  ok('a stray click keeps the half-drawn line', A.pendingLineAnchor() === lnG.id,
+     String(A.pendingLineAnchor()));
+  lnDown(eC.x, eC.y);
+  await frame();
+  lnUp(eC.x, eC.y);
+  await frame();
+  ok('the line still completes after a stray click',
+     A.state.lines.length === lnBefore3 + 1, `got ${A.state.lines.length}`);
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+  ok('the tool is put away again', A.isLineMode() === false);
+
+  // Lines pass behind the icons, so two icons sitting close together bury the
+  // whole connector. That must be said out loud, not left looking broken.
+  const lnStatus = () => document.getElementById('statusbar').textContent;
+  A.setSelection([]);
+  const lnNear1 = A.addInstance('sun.png', 3800, 2048);
+  const lnNear2 = A.addInstance('sun.png', 3864, 2048);   // one 64px cell over
+  await frame();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }));
+  await frame();
+  const n1 = centreW(lnNear1.id), n2 = centreW(lnNear2.id);
+  lnDown(n1.x, n1.y); await frame(); lnUp(n1.x, n1.y); await frame();
+  lnDown(n2.x, n2.y); await frame(); lnUp(n2.x, n2.y); await frame();
+  const lnHidden = A.state.lines[A.state.lines.length - 1];
+  ok('touching icons still make a line', lnHidden.a === lnNear1.id && lnHidden.b === lnNear2.id);
+  ok('the buried connector is reported as hidden', A.lineIsHidden(lnHidden) === true);
+  ok('the status bar says so', /hidden/.test(lnStatus()), lnStatus());
+
+  // trying the same pair again points at the line that is already there
+  lnDown(n1.x, n1.y); await frame(); lnUp(n1.x, n1.y); await frame();
+  lnDown(n2.x, n2.y); await frame(); lnUp(n2.x, n2.y); await frame();
+  ok('a repeat selects the existing line', A.state.lineSelection.has(lnHidden.id),
+     `sel=${A.state.lineSelection.size}`);
+  ok('a repeat says both already-connected and hidden',
+     /already connected/.test(lnStatus()) && /hidden/.test(lnStatus()),
+     lnStatus());
+
+  // a line with room to show must not claim to be hidden
+  ok('a line with room to show is not hidden', A.lineIsHidden(ln1) === false);
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await frame();
+
+  // a shell that has lost a layer heals itself rather than swallowing lines
+  document.getElementById('line-layer').remove();
+  A.render();
+  await frame();
+  ok('a missing #line-layer is rebuilt', !!document.getElementById('line-layer'));
+  ok('existing lines draw into the rebuilt layer',
+     document.querySelectorAll('#line-layer .line').length === A.state.lines.length,
+     `${document.querySelectorAll('#line-layer .line').length} of ${A.state.lines.length}`);
+  const healed = [...document.getElementById('canvas').children].map(n => n.id || n.className);
+  ok('the rebuilt layer lands back under the icons',
+     healed[0] === 'frame-layer' && healed[1] === 'line-layer', healed.slice(0, 3).join(','));
+
+  // A zero-sized outermost <svg> paints nothing no matter what `overflow` says,
+  // which once made every line and every group hull invisible. Guard the
+  // viewport itself, not just the elements drawn into it.
+  for (const id of ['line-layer', 'hull-layer']) {
+    const layer = document.getElementById(id);
+    const r = layer.getBoundingClientRect();
+    ok(`#${id} has a paintable viewport`, r.width > 1000 && r.height > 1000,
+       `${Math.round(r.width)}x${Math.round(r.height)}`);
+    // The client rect carries the canvas zoom, so the viewBox maps 1:1 onto
+    // world units exactly when box / zoom matches it.
+    const z = A.state.view.zoom;
+    ok(`#${id} maps its viewBox 1:1 onto world units`,
+       Math.abs(r.width / z - layer.viewBox.baseVal.width) < 1
+       && Math.abs(r.height / z - layer.viewBox.baseVal.height) < 1,
+       `viewBox ${layer.viewBox.baseVal.width} vs box/zoom ${Math.round(r.width / z)}`);
+  }
+
+  // and a drawn line has to fall inside that viewport, negatives included
+  A.setSelection([]);
+  const lnNeg1 = A.addInstance('sun.png', -1200, -900);
+  const lnNeg2 = A.addInstance('gear.png', -600, -500);
+  await frame();
+  A.state.lines.push({ id: 'neg-line', a: lnNeg1.id, b: lnNeg2.id });
+  A.render();
+  await frame();
+  const negEl = document.querySelector('.line-group[data-id="neg-line"] .line');
+  ok('a line at negative coordinates is drawn', !!negEl);
+  if (negEl) {
+    const lr = negEl.getBoundingClientRect();
+    const vr = document.getElementById('line-layer').getBoundingClientRect();
+    ok('it falls inside the layer viewport',
+       lr.left >= vr.left - 1 && lr.top >= vr.top - 1
+       && lr.right <= vr.right + 1 && lr.bottom <= vr.bottom + 1,
+       `line ${Math.round(lr.left)},${Math.round(lr.top)} in ${Math.round(vr.left)},${Math.round(vr.top)}`);
+    ok('and it has real extent', lr.width > 100 && lr.height > 100,
+       `${Math.round(lr.width)}x${Math.round(lr.height)}`);
+  }
+
 
 } catch (err) {
   fail++;

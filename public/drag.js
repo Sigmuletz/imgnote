@@ -1,6 +1,7 @@
 // drag.js — pointer interaction layer for imgnote.
 //
-// Owns: item dragging (+ live snap, group drag, Alt+drag duplicate), marquee
+// Owns: item dragging (+ live snap, group drag, Alt+drag duplicate), frame
+// move and resize, the line tool's two clicks, marquee
 // selection, shift-click toggle, pan (middle-drag / Space+drag), zoom
 // (Ctrl/Cmd+wheel) and wheel panning, palette drag-out, and hover -> hull
 // tracking. Everything else (toolbar, keyboard shortcuts other than drag
@@ -26,9 +27,23 @@ import {
   addInstance,
   duplicateSelection,
   rollback,
+  setFrameSelection,
+  setLineSelection,
+  isLineMode,
+  lineTargetAt,
+  pendingLineAnchor,
+  lineClickItem,
+  updateLinePreview,
+  beginFrameTitleEdit,
+  discardUndo,
+  frameContentIds,
+  findFrame,
+  selectedFrames,
+  FRAME_MIN,
 } from './app.js';
 
 const DRAG_THRESHOLD = 3; // px in screen space before a click becomes a drag
+const LINE_SNAP = 12;     // px in screen space of slack around an icon for the line tool
 
 const viewport = document.getElementById('viewport');
 const marquee = document.getElementById('marquee');
@@ -75,13 +90,59 @@ function onPointerDown(e) {
     return;
   }
 
+  if (isLineMode()) {
+    startLineGesture(e);
+    return;
+  }
+
+  // Connector lines sit under the icons, so e.target only resolves to one
+  // where no icon covers it -- an item always wins the click.
+  const lineEl = e.target.closest('.line-group');
+  if (lineEl) {
+    const id = lineEl.dataset.id;
+    if (e.shiftKey) {
+      const next = new Set(state.lineSelection);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      setLineSelection(next);
+    } else {
+      setLineSelection([id]);
+    }
+    return;
+  }
+
+  // A title being renamed is a text field, not a drag handle.
+  if (e.target.isContentEditable) return;
+
+  const handleEl = e.target.closest('.frame-handle');
+  if (handleEl) {
+    startFrameResize(e, handleEl);
+    return;
+  }
+
+  const titleEl = e.target.closest('.frame-title');
+  if (titleEl && e.detail >= 2) {
+    // Second click on a title opens the rename field. This lives here rather
+    // than on a dblclick listener because the first click captured the pointer
+    // on #viewport, which retargets click/dblclick away from the title.
+    e.preventDefault();
+    beginFrameTitleEdit(titleEl.closest('.frame')?.dataset.id);
+    return;
+  }
+
+  const frameGrabEl = e.target.closest('.frame-edge, .frame-title');
+  if (frameGrabEl) {
+    startFrameDrag(e, frameGrabEl.closest('.frame'));
+    return;
+  }
+
   const itemEl = e.target.closest('.item');
   if (itemEl) {
     startItemDrag(e, itemEl);
     return;
   }
 
-  // Anything else within #viewport is empty canvas.
+  // Anything else within #viewport is empty canvas. A frame's interior is
+  // pointer-transparent, so this fires inside frames too.
   startMarquee(e);
 }
 
@@ -92,7 +153,12 @@ function onPointerMove(e) {
     requestFrame();
     return;
   }
-  if (!activeDrag) handleHover(e);
+  if (activeDrag) return;
+  handleHover(e);
+  if (isLineMode()) {
+    const world = screenToWorld(e.clientX, e.clientY);
+    updateLinePreview(world.x, world.y);
+  }
 }
 
 function onPointerUp(e) {
@@ -103,6 +169,9 @@ function onPointerUp(e) {
 
   switch (d.type) {
     case 'item': finalizeItemDrag(d); break;
+    case 'line': finalizeLineGesture(d); break;
+    case 'frame': finalizeFrameDrag(d); break;
+    case 'frame-resize': finalizeFrameResize(d); break;
     case 'marquee': finalizeMarquee(d); break;
     case 'pan': finalizePan(d); break;
     case 'palette': finalizePaletteDrag(d); break;
@@ -146,6 +215,9 @@ function requestFrame() {
     if (!activeDrag) return;
     switch (activeDrag.type) {
       case 'item': updateItemDrag(); break;
+      case 'line': updateLineGesture(); break;
+      case 'frame': updateFrameDrag(); break;
+      case 'frame-resize': updateFrameResize(); break;
       case 'marquee': updateMarquee(); break;
       case 'pan': updatePan(); break;
       case 'palette': updatePaletteDrag(); break;
@@ -253,6 +325,214 @@ function toggleGroupSelection(id) {
     else next.add(gid);
   }
   setSelection(next);
+}
+
+// ---------------------------------------------------------------------------
+// 2a. The line tool
+// ---------------------------------------------------------------------------
+
+// Where the line tool thinks the pointer is, with a few px of slack so a small
+// icon does not demand a pixel-perfect hit.
+function lineTargetFor(clientX, clientY) {
+  const world = screenToWorld(clientX, clientY);
+  return lineTargetAt(world.x, world.y, LINE_SNAP / state.view.zoom);
+}
+
+/**
+ * The tool takes two clicks OR one drag, whichever the hand reaches for:
+ * press an icon and release on another and they connect; press and release on
+ * the same one and the anchor stays armed for a second click.
+ *
+ * A press that lands on nothing deliberately does NOT drop a half-drawn line:
+ * a near-miss on a small icon used to cancel silently, which read as the tool
+ * being broken. Esc, or clicking the anchor again, is how you take it back.
+ */
+function startLineGesture(e) {
+  e.preventDefault();
+  const target = lineTargetFor(e.clientX, e.clientY);
+  if (!target) return;
+
+  const anchorBefore = pendingLineAnchor();
+  lineClickItem(target.id);
+
+  // Only a press that armed the anchor can become a drag-to-connect; a press
+  // that completed a line has nothing left to drag.
+  if (anchorBefore) return;
+
+  viewport.setPointerCapture(e.pointerId);
+  activeDrag = {
+    type: 'line',
+    pointerId: e.pointerId,
+    anchorId: target.id,
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    currentClientX: e.clientX,
+    currentClientY: e.clientY,
+    moved: false,
+  };
+}
+
+function updateLineGesture() {
+  const d = activeDrag;
+  crossedThreshold(d);
+  const world = screenToWorld(d.currentClientX, d.currentClientY);
+  updateLinePreview(world.x, world.y);
+}
+
+function finalizeLineGesture(d) {
+  const target = lineTargetFor(d.currentClientX, d.currentClientY);
+  // Releasing on the icon the gesture started from is a plain click: leave the
+  // anchor armed so the second click can land wherever the user likes.
+  if (target && target.id !== d.anchorId) lineClickItem(target.id);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Frame move and resize
+// ---------------------------------------------------------------------------
+
+function startFrameDrag(e, frameEl) {
+  const id = frameEl?.dataset.id;
+  if (!id) return;
+
+  if (e.shiftKey) {
+    const next = new Set(state.frameSelection);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setFrameSelection(next);
+    return; // discrete toggle, not a drag starter
+  }
+
+  if (!state.frameSelection.has(id)) setFrameSelection([id]);
+
+  const frames = selectedFrames();
+  if (!frames.length) return;
+
+  pushUndo();
+
+  // Membership is read once, here: whatever the frames hold when the gesture
+  // starts is what travels with them. Items are not re-tested mid-drag, so
+  // nothing joins or leaves a frame while it is moving.
+  const carriedIds = frameContentIds(frames.map((f) => f.id));
+
+  viewport.setPointerCapture(e.pointerId);
+
+  activeDrag = {
+    type: 'frame',
+    pointerId: e.pointerId,
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    currentClientX: e.clientX,
+    currentClientY: e.clientY,
+    frames: frames.map((f) => ({ id: f.id, startX: f.x, startY: f.y })),
+    items: state.items
+      .filter((it) => carriedIds.has(it.id))
+      .map((it) => ({ id: it.id, startX: it.x, startY: it.y })),
+    moved: false,
+    dx: 0,
+    dy: 0,
+  };
+}
+
+function updateFrameDrag() {
+  const d = activeDrag;
+  crossedThreshold(d);
+
+  // Same single-snapped-delta rule as an item drag: the frame and everything
+  // riding on it shift by one identical amount, so nothing drifts.
+  const rawDx = (d.currentClientX - d.startClientX) / state.view.zoom;
+  const rawDy = (d.currentClientY - d.startClientY) / state.view.zoom;
+  const { dx, dy } = snapDelta(rawDx, rawDy);
+  d.dx = dx;
+  d.dy = dy;
+
+  for (const moved of d.frames) {
+    const frame = findFrame(moved.id);
+    if (frame) {
+      frame.x = moved.startX + dx;
+      frame.y = moved.startY + dy;
+    }
+  }
+  for (const moved of d.items) {
+    const item = state.items.find((it) => it.id === moved.id);
+    if (item) {
+      item.x = moved.startX + dx;
+      item.y = moved.startY + dy;
+    }
+  }
+  renderTransforms();
+}
+
+function finalizeFrameDrag(d) {
+  updateFrameDrag();
+  if (d.moved && (d.dx !== 0 || d.dy !== 0)) markDirty();
+  else discardUndo(); // a plain click on a frame costs no history
+}
+
+function startFrameResize(e, handleEl) {
+  const frameEl = handleEl.closest('.frame');
+  const frame = findFrame(frameEl?.dataset.id);
+  if (!frame) return;
+
+  if (!state.frameSelection.has(frame.id)) setFrameSelection([frame.id]);
+  pushUndo();
+
+  viewport.setPointerCapture(e.pointerId);
+
+  activeDrag = {
+    type: 'frame-resize',
+    pointerId: e.pointerId,
+    dir: handleEl.dataset.dir || 'se',
+    frameId: frame.id,
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    currentClientX: e.clientX,
+    currentClientY: e.clientY,
+    startRect: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+    moved: false,
+  };
+}
+
+function updateFrameResize() {
+  const d = activeDrag;
+  crossedThreshold(d);
+
+  const frame = findFrame(d.frameId);
+  if (!frame) return;
+
+  const rawDx = (d.currentClientX - d.startClientX) / state.view.zoom;
+  const rawDy = (d.currentClientY - d.startClientY) / state.view.zoom;
+  const r = d.startRect;
+
+  let left = r.x;
+  let top = r.y;
+  let right = r.x + r.w;
+  let bottom = r.y + r.h;
+
+  // Only the edges the handle names move; the opposite ones stay put. Each
+  // dragged edge snaps on its own, so a resized frame lands on the grid.
+  if (d.dir.includes('w')) left = Math.min(snap(r.x + rawDx), right - FRAME_MIN);
+  if (d.dir.includes('e')) right = Math.max(snap(right + rawDx), left + FRAME_MIN);
+  if (d.dir.includes('n')) top = Math.min(snap(r.y + rawDy), bottom - FRAME_MIN);
+  if (d.dir.includes('s')) bottom = Math.max(snap(bottom + rawDy), top + FRAME_MIN);
+
+  frame.x = left;
+  frame.y = top;
+  frame.w = right - left;
+  frame.h = bottom - top;
+  renderTransforms();
+}
+
+function finalizeFrameResize(d) {
+  updateFrameResize();
+  const frame = findFrame(d.frameId);
+  if (!frame) return;
+  const r = d.startRect;
+  if (frame.x !== r.x || frame.y !== r.y || frame.w !== r.w || frame.h !== r.h) {
+    markDirty();
+  } else {
+    // A handle pressed and released without changing anything should not
+    // leave an undo entry behind.
+    discardUndo();
+  }
 }
 
 // ---------------------------------------------------------------------------

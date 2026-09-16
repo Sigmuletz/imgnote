@@ -37,6 +37,8 @@ not filing files.
 | Ctrl+A / Esc | select all / clear |
 | Ctrl+G / Ctrl+Shift+G | group / ungroup |
 | Ctrl+D | duplicate, offset one grid cell |
+| Ctrl+B | add a frame around the selection |
+| L | line tool: click two icons to connect them |
 | Alt+drag | drag a duplicate off the original |
 | Delete | remove instances from the board (never deletes files) |
 | Ctrl+Z / Ctrl+Shift+Z | undo / redo |
@@ -76,6 +78,38 @@ An existing file is never overwritten: a colliding name is written as
 
 The toolbar's `Paste image…` button does the same thing via the async clipboard
 API, which the browser may refuse; `Ctrl+V` always works.
+
+## Frames
+
+A frame is a dashed box with a title that sits under the icons. `Ctrl+B` (or the
+toolbar's `Frame` button) drops one around whatever is selected, or in the middle
+of the view when nothing is. Drag its border or its title and everything standing
+on it comes along; the eight handles resize it without disturbing the contents.
+Double-click the title to rename it.
+
+Nothing is tagged as "belonging" to a frame — a frame simply carries whatever is
+sitting inside it when you pick it up, so you move icons in and out by putting
+them there. The inside of a frame stays fully usable: rubber-band selection and
+item drags work through it as if it were bare canvas. Deleting a frame deletes
+the box and leaves its contents where they are.
+
+## Lines
+
+`L` (or the toolbar's `Line` button) arms the line tool. Click one icon, then
+another — or just drag from one to the other — and a dashed line connects their
+centres, drawn behind the icons. Hovering an icon outlines it so you can see what
+you are about to hit, and a click that lands a few pixels off a small icon still
+counts. The tool stays armed, so you can keep connecting; `Esc` drops a half-drawn
+line and a second `Esc` puts the tool away.
+
+Lines pass behind the icons, so two icons sitting right next to each other bury
+the connector completely — the status bar tells you when a line lands hidden,
+and moving them apart reveals it.
+
+Any number of lines can leave the same icon. A line remembers the two icons,
+not a position, so dragging either one — or the frame it is standing on — takes
+the line with it. Click a line to select it and `Delete` to remove it; deleting
+an icon removes everything that was connected to it.
 
 Groups are unnamed and atomic: clicking any member selects and moves the whole
 group, keeping relative offsets exact. A dashed outline shows the group while

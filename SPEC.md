@@ -53,7 +53,7 @@ Board items are **instances**, not one-per-file: the same image can appear many 
   "groups": [ { "id": "g1" } ],
   "frames": [ { "id": "f1", "x": 96, "y": 64, "w": 320, "h": 240, "title": "Weather" } ],
   "lines": [ { "id": "l1", "a": "i1", "b": "i2", "rules": ["r1"] } ],
-  "rules": [ { "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null } ]
+  "rules": [ { "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null, "invert": false } ]
 }
 ```
 
@@ -193,10 +193,10 @@ about one, not a cage around it.
 
 ### What a rule says
 
-A rule is a name and up to two ranges:
+A rule is a name, up to two ranges, and a flag:
 
 ```json
-{ "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null }
+{ "id": "r1", "name": "one cell right", "x": { "min": 96, "max": 160 }, "y": null, "invert": false }
 ```
 
 - A null axis is unconstrained. Within an axis the test is `min <= d <= max`,
@@ -209,10 +209,28 @@ A rule is a name and up to two ranges:
 - Rules live in a **per-board library**; a line stores ids, not copies. Editing a
   rule's bounds re-tests every line that uses it at once, which is the point of a
   library: "the gap I want between a pair" is one idea, stated once.
+- `invert` turns the rule inside out: set it and the rule passes exactly when it would
+  otherwise fail. The ranges keep their meaning — they stop being ground the offset
+  must land on and become ground it must avoid — which is how "keep these two apart"
+  gets written with the same machinery as "keep these two together". Unset (the
+  default) the rule reads exactly as above.
 - Several rules on one line combine with AND. Any broken rule makes the line broken.
+  Inverted and plain rules mix freely; the AND across rules is unchanged.
 - Deleting a rule from the library is immediate and unconfirmed — it is one `Ctrl+Z`
   away, like every other mutation. Lines still pointing at a dead id ignore it when
   they are evaluated, and those ids are pruned on load.
+
+`invert` is a property of the rule, not of an attachment, so it applies everywhere that
+rule is used — like the bounds themselves. It negates the rule **as a whole**, after
+the per-axis AND, not axis by axis. A two-axis inverted rule therefore passes as soon
+as **one** axis falls outside its range: what is being negated is the conjunction,
+which is the useful reading — "not (close on x and close on y)" is "not stacked on top
+of each other", while negating each axis separately would demand both be far, a much
+stronger claim nobody asked for.
+
+One honest corner: a rule with both axes off constrains nothing and so holds trivially,
+which means inverted it can never pass. It is not a bug, just the definition followed
+through — an inverted rule with nothing forbidden forbids everything.
 
 ### What it looks like
 
@@ -250,11 +268,17 @@ For the selected line it shows:
 - a header, `LINE a → b`, naming the direction every number below is measured in;
 - the live signed `dx` / `dy`, tracking a drag in real time rather than updating on
   release, so an icon can be dragged while the numbers walk into range;
-- each attached rule with a ✓ or ✗ and its per-axis `min..max`; a failing axis also
-  shows the actual value beside it, because "which number is wrong" is the first
-  question a red line raises;
+- each attached rule with a ✓ or ✗ and its per-axis `min..max`; the axis that decided a
+  ✗ also shows the actual value beside it, because "which number is wrong" is the first
+  question a red line raises. For a plain rule that is the axis outside its range; for
+  an inverted one it is the axis that sat inside it — the offending number in both
+  cases, since the axes are measured the same way either way round;
 - name and bounds as editable fields with a per-axis on/off toggle, plus detach and
   delete;
+- a `not` checkbox beside the name, because inversion reads as part of the name — "not
+  row gap" — rather than as a property of either range. Ticking it is one undo step.
+  An inverted row is marked as such, and each of its axis rows repeats the word `not`
+  in front of the range, so a glance at a bound can never read it backwards;
 - `[+ attach ▾]`, `[new rule]` and `[⇄ swap ends]`.
 
 With several lines selected the panel shows the **first** line's numbers and rules — a
@@ -262,8 +286,9 @@ merged list of everything would be unreadable — but every action applies to th
 selection. Attaching a rule with five lines selected attaches it five times.
 
 `[new rule]` prefills from the selected line's live geometry, snapped to the grid and
-widened by ±32 on both axes, both axes on, auto-named, and attached immediately. The
-common case is "keep these roughly where they are now", so that is one button.
+widened by ±32 on both axes, both axes on, `invert` off, auto-named, and attached
+immediately. The common case is "keep these roughly where they are now", so that is one
+button.
 
 Board shortcuts stand down while a panel field has the focus, so typing `-200` into a
 bounds field cannot fire `Delete`, `L`, `S`, `0`, `F` or `\`. The panel needs no modal
@@ -289,6 +314,9 @@ are one snapshot each.
   `lines`, and each line saves its own array of rule ids. A missing `"rules"` key
   reads as `[]`, so a board saved before this feature loads unchanged. `serve.py` is
   untouched — the layout is an opaque blob to the server.
+- `invert` is written out for every rule, `true` or `false`. On load a missing key, or
+  anything that is not a boolean, reads as `false`: the plain reading is the safe one,
+  so a file written before the flag existed keeps exactly the meaning it had.
 
 ## Dragging and snapping
 
